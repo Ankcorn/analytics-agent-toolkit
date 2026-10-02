@@ -19,21 +19,21 @@ export const presets = {
           question: "Invocations and 5xx per script",
           sql: `SELECT "scriptName", sum("sampleInterval") AS invocations, sumIf("sampleInterval", "httpStatus" >= 500) AS errors
 FROM logs.workersLogs
-WHERE timestamp >= $start AND timestamp < $end AND "logType" = 'cf-worker-event'
+WHERE timestamp >= now() - INTERVAL '1 day' AND "logType" = 'cf-worker-event'
 GROUP BY "scriptName" ORDER BY invocations DESC LIMIT 20`
         },
         {
           question: "p99 wall time per script",
           sql: `SELECT "scriptName", quantileWeighted(0.99, "wallTimeMs", "sampleInterval") AS p99_wall_ms
 FROM logs.workersLogs
-WHERE timestamp >= $start AND timestamp < $end AND "logType" = 'cf-worker-event'
+WHERE timestamp >= now() - INTERVAL '1 day' AND "logType" = 'cf-worker-event'
 GROUP BY "scriptName" ORDER BY p99_wall_ms DESC LIMIT 20`
         },
         {
           question: "Most common error messages",
           sql: `SELECT "scriptName", message, sum("sampleInterval") AS n
 FROM logs.workersLogs
-WHERE timestamp >= $start AND timestamp < $end AND level = 'error'
+WHERE timestamp >= now() - INTERVAL '1 day' AND level = 'error'
 GROUP BY "scriptName", message ORDER BY n DESC LIMIT 20`
         }
       ]

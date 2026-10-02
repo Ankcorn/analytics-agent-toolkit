@@ -7,8 +7,8 @@ export default defineConfig({
     compatibilityDate: "2026-09-25",
     compatibilityFlags: ["nodejs_compat"],
     env: {
-      // Remote-only: `wrangler dev` proxies both to your account.
-      ANALYTICS_SQL: bindings.analyticsSQL({ dev: { remote: true } }),
+      ANALYTICS: { type: "analytics" },
+      // Workers AI is remote-only: `wrangler dev` proxies it to your account.
       AI: bindings.ai({ dev: { remote: true } }),
       AI_SDK_AGENT: bindings.durableObject({
         worker: "cf-agent-sql-example",

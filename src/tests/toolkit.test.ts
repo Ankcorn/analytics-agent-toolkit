@@ -15,8 +15,7 @@ import {
   applyPreset,
   catalogFromIntrospection,
   catalogToModule,
-  filterCatalog,
-  unionCatalogs
+  filterCatalog
 } from "../build";
 import { analyticsSQLTools } from "../ai-sdk";
 
@@ -68,52 +67,39 @@ const introspection: IntrospectionResponse = {
 };
 const catalog = catalogFromIntrospection(introspection);
 
-function fakeBinding(
-  impl: (q: string, p: unknown) => Record<string, unknown>[] | Error
-) {
-  const calls: { query: string; params: unknown }[] = [];
+function fakeBinding(impl: (q: string) => Record<string, unknown>[] | Error) {
+  const calls: { query: string }[] = [];
   const binding: AnalyticsSQLLike = {
     async query(req) {
-      calls.push({ query: req.query, params: req.params });
-      const r = impl(req.query, req.params);
+      calls.push(req);
+      const r = impl(req.query);
       if (r instanceof Error) throw r;
-      return {
-        data: r as never[],
-        rows: r.length,
-        statistics: { elapsed_ms: 3, rows_read: 10, bytes_read: 100 }
-      };
+      return { data: r };
     }
   };
   return { binding, calls };
 }
-
-test("introspection maps kind, sampling, aggregations and picks a time column", () => {
+test("introspection drops hidden columns, maps sampling and aggregations, and picks a time column", () => {
   const [logs, traces, kv] = catalog.tables;
+  assert.ok(!logs!.columns.some((c) => c.name === "attributes"));
   assert.equal(logs!.timeColumn, "timestamp");
   assert.equal(logs!.sampling, "adaptive");
   assert.equal(traces!.timeColumn, "startTime");
   assert.deepEqual(kv!.validAggregations, ["max"]);
 });
 
-test("filterCatalog drops hidden + excluded columns and filters by category/kind/glob", () => {
-  // Arrange / Act
-  const byCat = filterCatalog(catalog, { categories: ["storage"] });
-  const byGlob = filterCatalog(catalog, {
+test("filterCatalog selects tables by glob and drops excluded columns", () => {
+  // Act
+  const c = filterCatalog(catalog, {
     tables: ["logs.*"],
-    kinds: ["logs"],
     excludeColumns: ["account*"]
   });
   // Assert
   assert.deepEqual(
-    byCat.tables.map((t) => t.name),
-    ["states.kvStorage"]
-  );
-  assert.deepEqual(
-    byGlob.tables.map((t) => t.name),
+    c.tables.map((t) => t.name),
     ["logs.workersLogs", "logs.traces"]
   );
-  const cols = byGlob.tables[0]!.columns.map((c) => c.name);
-  assert.ok(!cols.includes("accountTag") && !cols.includes("attributes"));
+  assert.ok(!c.tables[0]!.columns.some((col) => col.name === "accountTag"));
 });
 
 test("preset column allow-list always keeps time column and sampleInterval, and adds examples", () => {
@@ -151,17 +137,22 @@ test("SHOW TABLES and DESCRIBE are passed to the backend as-is", async () => {
   assert.ok(!desc.ok);
 });
 
-test("catalog search by table returns its full definition", () => {
+test("catalog search by table returns its full definition; other names get the table list", () => {
   // Arrange
   const tk = createAnalyticsSQLToolkit({
     binding: fakeBinding(() => []).binding,
     catalog
   });
   // Act
-  const text = tk.search({ table: "workersLogs" });
+  const found = tk.search({ table: "logs.workersLogs" });
+  const missing = tk.search({ table: "workersLogs" });
   // Assert
-  assert.match(text, /logs\.workersLogs/);
-  assert.match(text, /httpStatus Int64/);
+  assert.match(found, /^## logs\.workersLogs/);
+  assert.match(found, /httpStatus Int64/);
+  assert.match(
+    missing,
+    /^No table "workersLogs"\.\nTables:\n- logs\.workersLogs/
+  );
 });
 
 // Hand-written catalog for search: table notes and descriptions that overlap.
@@ -254,67 +245,46 @@ test("catalog search with no match or no input lists the tables", () => {
   assert.match(all, /^Tables:\n- logs\.workersLogs \(time: timestamp/);
 });
 
-test("a LIMIT followed by a comment is recognised, so no second LIMIT is added", async () => {
+test("SQL is sent exactly as written", async () => {
   // Arrange
-  const { binding, calls } = fakeBinding(() => []);
+  const { binding, calls } = fakeBinding(() => [{ n: 1 }]);
   const tk = createAnalyticsSQLToolkit({ binding, catalog });
   const sql =
-    "SELECT timestamp FROM logs.workersLogs WHERE timestamp >= $start ORDER BY timestamp LIMIT 10 -- top ten\n/* done */";
+    "SELECT count() AS n FROM logs.workersLogs WHERE timestamp >= now() - INTERVAL '1 day' AND message LIKE '%$x -- y%';";
   // Act
-  await tk.query({ sql });
+  const out = await tk.query({ sql });
   // Assert
-  assert.equal(calls[0]!.query, sql);
+  assert.deepEqual(calls, [{ query: sql }]);
+  assert.deepEqual(out, { ok: true, rows: [{ n: 1 }], truncated: false });
+  assert.equal(formatQueryOutput(out), "n\n1");
 });
 
-test("a result that hits the query's own LIMIT warns that it is only the top rows", async () => {
+test("results are cut to maxRows and maxResultChars, and the model is told", async () => {
   // Arrange
-  const { binding } = fakeBinding(() => [{ n: 3 }, { n: 2 }]);
-  const tk = createAnalyticsSQLToolkit({ binding, catalog });
+  const rows = Array.from({ length: 50 }, (_, i) => ({
+    i,
+    pad: "x".repeat(100)
+  }));
+  const { binding } = fakeBinding(() => rows);
   // Act
-  const full = await tk.query({
-    sql: 'SELECT "scriptName", count() AS n FROM logs.workersLogs WHERE timestamp >= $start GROUP BY 1 ORDER BY n DESC LIMIT 2'
-  });
-  const partial = await tk.query({
-    sql: 'SELECT "scriptName", count() AS n FROM logs.workersLogs WHERE timestamp >= $start GROUP BY 1 ORDER BY n DESC LIMIT 5'
-  });
-  // Assert
-  assert.match(formatQueryOutput(full), /WARNING: .*LIMIT 2.*top rows/);
-  assert.doesNotMatch(formatQueryOutput(partial), /WARNING/);
-});
-
-test("$ inside string literals is not treated as a parameter", async () => {
-  // Arrange
-  const { binding, calls } = fakeBinding(() => []);
-  const tk = createAnalyticsSQLToolkit({ binding, catalog });
-  // Act
-  const out = await tk.query({
-    sql: `SELECT count() AS n FROM logs.workersLogs WHERE timestamp >= $start AND timestamp < $end AND "scriptName" LIKE '%$price%'`
-  });
-  // Assert
-  assert.ok(out.ok, JSON.stringify(out));
-  assert.deepEqual(Object.keys(calls[0]!.params as object).toSorted(), [
-    "end",
-    "start"
-  ]);
-});
-
-test("valid query binds only referenced params, adds LIMIT, truncates", async () => {
-  const rows = Array.from({ length: 150 }, (_, i) => ({ i }));
-  const { binding, calls } = fakeBinding(() => rows);
-  const out = await createAnalyticsSQLToolkit({
+  const byRows = await createAnalyticsSQLToolkit({
     binding,
     catalog,
-    maxRows: 100
-  }).query({
-    sql: 'SELECT "httpStatus" FROM logs.workersLogs WHERE timestamp >= $start AND timestamp < $end',
-    start: "-15m"
-  });
-  assert.match(calls[0]!.query, /LIMIT 101$/);
-  assert.deepEqual(Object.keys(calls[0]!.params as object).toSorted(), [
-    "end",
-    "start"
-  ]);
-  assert.ok(out.ok && out.rowCount === 100 && out.truncated);
+    maxRows: 10
+  }).query({ sql: "SELECT 1" });
+  const byChars = await createAnalyticsSQLToolkit({
+    binding,
+    catalog,
+    maxResultChars: 1_000
+  }).query({ sql: "SELECT 1" });
+  // Assert
+  assert.ok(byRows.ok && byRows.rows.length === 10 && byRows.truncated);
+  assert.ok(
+    byChars.ok &&
+      JSON.stringify(byChars.rows).length <= 1_000 &&
+      byChars.truncated
+  );
+  assert.match(formatQueryOutput(byRows), /^Showing the first 10 rows only/);
 });
 
 test("backend errors are passed through verbatim, without rewriting", async () => {
@@ -325,47 +295,11 @@ test("backend errors are passed through verbatim, without rewriting", async () =
   const tk = createAnalyticsSQLToolkit({ binding, catalog });
   // Act
   const out = await tk.query({
-    sql: "SELECT status FROM logs.workersLogs WHERE timestamp >= $start"
+    sql: "SELECT status FROM logs.workersLogs"
   });
   // Assert
   assert.deepEqual(out, { ok: false, error });
   assert.equal(formatQueryOutput(out), `ERROR: ${error}`);
-});
-
-test("a LIMIT inside a subquery doesn't stop the outer query getting one", async () => {
-  // Arrange
-  const { binding, calls } = fakeBinding(() => []);
-  const tk = createAnalyticsSQLToolkit({ binding, catalog, maxRows: 100 });
-  // Act
-  await tk.query({
-    sql: "SELECT * FROM (SELECT timestamp FROM logs.workersLogs WHERE timestamp >= $start LIMIT 5) AS x ORDER BY timestamp"
-  });
-  // Assert
-  assert.match(calls[0]!.query, /ORDER BY timestamp\nLIMIT 101$/);
-});
-
-test("unionCatalogs merges presets that share a table", () => {
-  const a = applyPreset(catalog, {
-    description: "a",
-    tables: ["logs.workersLogs"],
-    columns: { "logs.workersLogs": ["httpStatus"] }
-  });
-  const b = applyPreset(catalog, {
-    description: "b",
-    tables: ["logs.*"],
-    columns: { "logs.workersLogs": ["scriptName"] }
-  });
-  const u = unionCatalogs([a, b]);
-  assert.deepEqual(
-    u.tables.map((t) => t.name),
-    ["logs.workersLogs", "logs.traces"]
-  );
-  assert.deepEqual(u.tables[0]!.columns.map((c) => c.name).toSorted(), [
-    "httpStatus",
-    "sampleInterval",
-    "scriptName",
-    "timestamp"
-  ]);
 });
 
 test("generated module is importable and drives the AI SDK tools (build → runtime round trip)", async () => {
@@ -385,7 +319,7 @@ test("generated module is importable and drives the AI SDK tools (build → runt
   const { catalog: generated } = (await import(pathToFileURL(file).href)) as {
     catalog: typeof subset;
   };
-  const { tools } = analyticsSQLTools({
+  const tools = analyticsSQLTools({
     binding: fakeBinding(() => []).binding,
     catalog: generated
   });
@@ -399,11 +333,11 @@ test("generated module is importable and drives the AI SDK tools (build → runt
   const description = String(tools.analytics_query!.description);
   assert.match(description, /^- logs\.workersLogs \(time: timestamp/m);
   assert.doesNotMatch(description, /httpStatus Int64/); // columns come from the catalog tool
-  const search = tools.analytics_catalog!.execute as (
+  const searchTool = tools.analytics_catalog!.execute as (
     input: { table?: string; query?: string },
     options: unknown
   ) => Promise<string>;
-  const columns = await search({ table: "logs.workersLogs" }, {});
+  const columns = await searchTool({ table: "logs.workersLogs" }, {});
   assert.match(String(columns), /httpStatus Int64/);
   assert.doesNotMatch(String(columns), /^- accountTag /m);
 });

@@ -4,7 +4,7 @@ import type { PiAgent } from "./pi-agent";
 declare global {
   namespace Cloudflare {
     interface Env {
-      ANALYTICS_SQL: AnalyticsSQLBinding;
+      ANALYTICS: AnalyticsSQLBinding;
       AI: Ai;
       AI_SDK_AGENT: DurableObjectNamespace<AISDKAgent>;
       PI_AGENT: DurableObjectNamespace<PiAgent>;

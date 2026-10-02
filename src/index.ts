@@ -3,9 +3,7 @@ export type {
   Catalog,
   CatalogSearch,
   ColumnDef,
-  DatasetKind,
   ExampleQuery,
-  RenderMode,
   TableDef
 } from "./catalog";
 export {
@@ -17,7 +15,6 @@ export type {
   AnalyticsSQLLike,
   AnalyticsSQLToolkit,
   AnalyticsSQLToolkitOptions,
-  Param,
   QueryInput,
   QueryOutput
 } from "./toolkit";

@@ -1,7 +1,7 @@
 /**
  * The catalog is the workaround for `SHOW TABLES` / `DESCRIBE TABLE` not being
  * available through the Analytics SQL binding. It is generated at build time by
- * `asql render --out` (introspection → presets/filters → TS module) and passed
+ * `asql render --out` (introspection → preset → TS module) and passed
  * to the AI SDK / Pi tools at runtime, where the agent reads it through the
  * catalog search tool.
  */
@@ -13,11 +13,7 @@ export interface ColumnDef {
   description?: string;
   /** Known/allowed values or representative samples. Rendered as hints. */
   values?: readonly (string | number)[];
-  /** Marked hidden by introspection; dropped by `filterCatalog` unless `includeHidden`. */
-  hidden?: boolean;
 }
-
-export type DatasetKind = "events" | "logs" | "states";
 
 export interface ExampleQuery {
   question: string;
@@ -34,9 +30,6 @@ export interface TableDef {
   examples?: readonly ExampleQuery[];
   notes?: readonly string[];
   title?: string;
-  /** Introspection category, e.g. "Storage", "Logs and Traces". */
-  category?: string;
-  kind?: DatasetKind;
   sampling?: "adaptive" | "unsampled";
   /** For `states` datasets: the aggregations the backend accepts. */
   validAggregations?: readonly string[];
@@ -48,39 +41,14 @@ export interface Catalog {
   tables: readonly TableDef[];
 }
 
-export function findTable(
-  catalog: Catalog,
-  name: string
-): TableDef | undefined {
-  const needle = normalizeIdent(name);
-  return (
-    catalog.tables.find((t) => normalizeIdent(t.name) === needle) ??
-    // allow unqualified names when unambiguous: `workersLogs` -> `logs.workersLogs`
-    single(
-      catalog.tables.filter(
-        (t) => normalizeIdent(t.name).split(".").pop() === needle
-      )
-    )
-  );
-}
-
-export type RenderMode =
-  /** Every table with every column. Best when the catalog is small. */
-  | "full"
-  /** Only table names, descriptions and time columns. Pair with the catalog search tool. */
-  | "index";
-
-export function renderCatalog(
-  catalog: Catalog,
-  mode: RenderMode = "full"
-): string {
-  const parts: string[] = [];
-  if (catalog.notes?.length)
-    parts.push(catalog.notes.map((n) => `- ${n}`).join("\n"));
-  if (mode === "index")
-    parts.push(catalog.tables.map(renderTableIndex).join("\n"));
-  else for (const table of catalog.tables) parts.push(renderTable(table));
-  return parts.join("\n\n");
+/** Every table in full, for previewing what the model can see (`asql render`). */
+export function renderCatalog(catalog: Catalog): string {
+  return [
+    ...(catalog.notes?.length
+      ? [catalog.notes.map((n) => `- ${n}`).join("\n")]
+      : []),
+    ...catalog.tables.map(renderTable)
+  ].join("\n\n");
 }
 
 export function renderTableIndex(table: TableDef): string {
@@ -129,7 +97,7 @@ export function renderTable(table: TableDef): string {
 export interface CatalogSearch {
   /** Words matched against table and column names and descriptions, e.g. "status code", "cpu time". */
   query?: string;
-  /** A table name (qualified or not), e.g. "logs.workersLogs": returns every column, notes and examples. */
+  /** A full table name, e.g. "logs.workersLogs": returns every column, notes and examples. */
   table?: string;
 }
 
@@ -155,13 +123,8 @@ export function searchCatalog(
 ): string {
   const index = () => catalog.tables.map(renderTableIndex).join("\n");
   if (table) {
-    const t = findTable(catalog, table);
-    if (t) return renderTable(t);
-    const s = closest(
-      table,
-      catalog.tables.map((x) => x.name)
-    );
-    return `No table "${table}".${s.length ? ` Did you mean ${s.join(", ")}?` : ""}\nTables:\n${index()}`;
+    const t = catalog.tables.find((x) => x.name === table);
+    return t ? renderTable(t) : `No table "${table}".\nTables:\n${index()}`;
   }
   const terms = [
     ...new Set((query ?? "").split(/\W+/).filter(Boolean).map(searchTerm))
@@ -205,50 +168,4 @@ export function searchCatalog(
         .map((r) => r.text)
         .join("\n\n")
     : `No tables or columns match "${query}".\nTables:\n${index()}`;
-}
-
-export function normalizeIdent(name: string): string {
-  return name.replace(/[`"]/g, "").trim().toLowerCase();
-}
-
-function single<T>(items: T[]): T | undefined {
-  return items.length === 1 ? items[0] : undefined;
-}
-
-/** Levenshtein-based "did you mean" for column/table typos. */
-export function closest(
-  needle: string,
-  candidates: readonly string[],
-  max = 3
-): string[] {
-  const n = needle.toLowerCase();
-  return candidates
-    .map((c) => ({ c, d: distance(n, c.toLowerCase()) }))
-    .filter(
-      ({ c, d }) =>
-        d <= Math.max(2, Math.floor(c.length / 3)) ||
-        c.toLowerCase().includes(n) ||
-        n.includes(c.toLowerCase())
-    )
-    .toSorted((a, b) => a.d - b.d)
-    .slice(0, max)
-    .map(({ c }) => c);
-}
-
-function distance(a: string, b: string): number {
-  const dp = Array.from({ length: b.length + 1 }, (_, i) => i);
-  for (let i = 1; i <= a.length; i++) {
-    let prev = dp[0]!;
-    dp[0] = i;
-    for (let j = 1; j <= b.length; j++) {
-      const tmp = dp[j]!;
-      dp[j] = Math.min(
-        dp[j]! + 1,
-        dp[j - 1]! + 1,
-        prev + (a[i - 1] === b[j - 1] ? 0 : 1)
-      );
-      prev = tmp;
-    }
-  }
-  return dp[b.length]!;
 }

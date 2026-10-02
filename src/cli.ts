@@ -18,10 +18,8 @@ import {
   applyPreset,
   catalogFromIntrospection,
   catalogToModule,
-  filterCatalog,
-  unionCatalogs
+  filterCatalog
 } from "./build";
-import type { DatasetKind } from "./catalog";
 
 const HELP = `asql — build-time catalog tool for Analytics SQL agents (wraps \`cf\`).
 
@@ -29,17 +27,13 @@ const HELP = `asql — build-time catalog tool for Analytics SQL agents (wraps \
       Fetch the full catalog via \`cf analytics sql introspection get --include-columns\`
       into ${".cloudflare/analytics-sql/introspection.json"} (local cache, never bundled).
 
-  asql render [filters] [--out <file.ts>]
+  asql render [--preset <name>] [--table <glob>] [--out <file.ts>]
       Without --out: print the schema text the model will see (+ token estimate).
       With --out:    write it as a TS module exporting \`catalog\` for the AI SDK / Pi tools.
 
-Filters (combine freely; repeat --preset to union presets):
-  --preset <name>           From ./presets.ts
-  --table <glob>            e.g. 'logs.*'
-  --category <name>         e.g. Storage
-  --kind <events|logs|states>
-  --search <term>
-  --exclude-column <glob>   e.g. accountTag
+Selection:
+  --preset <name>    From ./presets.ts
+  --table <glob>     e.g. 'logs.*' (repeatable; narrows a preset if both are given)
 
 Options:
   --cache <path>     Introspection cache (default .cloudflare/analytics-sql/introspection.json)
@@ -50,12 +44,8 @@ Options:
 const { values: flags, positionals } = parseArgs({
   allowPositionals: true,
   options: {
-    preset: { type: "string", multiple: true },
+    preset: { type: "string" },
     table: { type: "string", multiple: true },
-    category: { type: "string", multiple: true },
-    kind: { type: "string", multiple: true },
-    search: { type: "string" },
-    "exclude-column": { type: "string", multiple: true },
     out: { type: "string" },
     cache: {
       type: "string",
@@ -112,35 +102,16 @@ async function render(): Promise<void> {
     JSON.parse(readFileSync(cache, "utf8")) as IntrospectionResponse
   );
 
-  if (flags.preset?.length) {
+  if (flags.preset) {
     const presets = await loadPresets();
-    catalog = unionCatalogs(
-      flags.preset.map((name) => {
-        const p = presets[name];
-        if (!p)
-          fail(
-            `Unknown preset "${name}". Available: ${Object.keys(presets).join(", ")}`
-          );
-        return applyPreset(catalog, p);
-      })
-    );
+    const preset = presets[flags.preset];
+    if (!preset)
+      fail(
+        `Unknown preset "${flags.preset}". Available: ${Object.keys(presets).join(", ")}`
+      );
+    catalog = applyPreset(catalog, preset);
   }
-  const adHoc =
-    flags.table ||
-    flags.category ||
-    flags.kind ||
-    flags.search ||
-    flags["exclude-column"];
-  if (adHoc || !flags.preset?.length) {
-    catalog = filterCatalog(catalog, {
-      tables: flags.table,
-      categories: flags.category,
-      kinds: flags.kind as DatasetKind[] | undefined,
-      search: flags.search,
-      excludeColumns: flags["exclude-column"],
-      includeHidden: Boolean(flags.preset?.length) // presets already dropped hidden columns
-    });
-  }
+  if (flags.table) catalog = filterCatalog(catalog, { tables: flags.table });
   if (catalog.tables.length === 0) fail("No tables match these filters.");
 
   const text = renderCatalog(catalog);
@@ -193,17 +164,9 @@ function cf(args: string[]): Promise<string> {
         env: { ...process.env, NO_COLOR: "1" }
       },
       (error, stdout, stderr) => {
-        if (!error) return ok(stdout);
-        const body = /Body:\s*("(?:[^"\\]|\\.)*")/.exec(
-          `${stdout}\n${stderr}`
-        )?.[1];
-        reject(
-          new Error(
-            body
-              ? (JSON.parse(body) as string)
-              : `${stdout}\n${stderr}`.trim() || error.message
-          )
-        );
+        if (error)
+          reject(new Error(`${stderr}\n${stdout}`.trim() || error.message));
+        else ok(stdout);
       }
     );
   });

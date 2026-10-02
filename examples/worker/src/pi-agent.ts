@@ -19,7 +19,7 @@ export class PiAgent extends Agent<Env> {
       // The extension adds two tools: analytics_query and analytics_catalog.
       const registry = createRegistry();
       registry.install(
-        analyticsSQLExtension({ binding: this.env.ANALYTICS_SQL, catalog })
+        analyticsSQLExtension({ binding: this.env.ANALYTICS, catalog })
       );
       // MemoryStorage: the conversation lives as long as this instance stays in memory.
       return Harness.open(

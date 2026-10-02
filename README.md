@@ -10,8 +10,8 @@ import { catalog } from "./analytics-catalog"; // generated at build time by `as
 const registry = createRegistry();
 registry.install(
   // Two tools: analytics_catalog (find tables and columns)
-  // and analytics_query (run SQL through the ANALYTICS_SQL binding).
-  analyticsSQLExtension({ binding: env.ANALYTICS_SQL, catalog })
+  // and analytics_query (run SQL through the ANALYTICS binding).
+  analyticsSQLExtension({ binding: env.ANALYTICS, catalog })
 );
 // Open your Pi harness with this registry. Full Agents SDK examples for Pi and AI SDK are below.
 ```
@@ -29,17 +29,17 @@ npm install cf-agent-sql
 
 Install `ai` and `zod` for the AI SDK tool, or `@earendil-works/pi-ai` and `@earendil-works/pi-durable` for Pi. Both are optional peer dependencies.
 
-Add the binding in `cloudflare.config.ts`. It's remote-only, so mark it remote for local dev:
+Add the binding in `cloudflare.config.ts`:
 
 ```ts
-import { bindings, defineConfig } from "@cloudflare/config";
+import { defineConfig } from "@cloudflare/config";
 
 export default defineConfig({
   worker: {
     name: "my-agent",
     entrypoint: "./src/index.ts",
     compatibilityDate: "2026-09-25",
-    env: { ANALYTICS_SQL: bindings.analyticsSQL({ dev: { remote: true } }) }
+    env: { ANALYTICS: { type: "analytics" } }
   }
 });
 ```
@@ -79,7 +79,7 @@ export const presets = {
 } satisfies Presets;
 ```
 
-Repeat `--preset` to combine presets. You can also filter without a preset: `--table 'logs.*'`, `--category Storage`, `--kind events`, `--search latency`, `--exclude-column accountTag`.
+Without a preset, `--table 'logs.*'` picks tables by name. With a preset, `--table` narrows it further.
 
 ## Use the tools
 
@@ -103,7 +103,7 @@ export class PiAgent extends Agent<Env> {
   registry() {
     const registry = createRegistry();
     registry.install(
-      analyticsSQLExtension({ binding: this.env.ANALYTICS_SQL, catalog })
+      analyticsSQLExtension({ binding: this.env.ANALYTICS, catalog })
     );
     return registry;
   }
@@ -123,13 +123,11 @@ import { catalog } from "./analytics-catalog";
 
 export class AISDKAgent extends Agent<Env> {
   async ask(prompt: string): Promise<string> {
-    const sql = analyticsSQLTools({ binding: this.env.ANALYTICS_SQL, catalog });
     const agent = new ToolLoopAgent({
       model: createWorkersAI({ binding: this.env.AI })(
         "@cf/zai-org/glm-5.3-flash"
       ),
-      instructions: sql.instructions,
-      tools: sql.tools,
+      tools: analyticsSQLTools({ binding: this.env.ANALYTICS, catalog }),
       stopWhen: stepCountIs(8)
     });
     return (await agent.generate({ prompt })).text;
@@ -139,20 +137,20 @@ export class AISDKAgent extends Agent<Env> {
 
 ## What the query tool does
 
-- **Sends your SQL as written.** The only changes are removing a trailing `;` and adding a `LIMIT` (below). `SHOW TABLES`, `DESCRIBE` and anything else go to the backend unchanged; the agent is told to use the catalog instead.
-- **Binds the time window.** `start` and `end` (ISO 8601 or relative, like `-1h` or `-7d`) are passed as `$start` and `$end`, along with any extra `params` the query references.
-- **Adds a `LIMIT`** and truncates results by row count and characters. Results go to the model as TSV, which uses fewer tokens than JSON.
-- **Warns when a result hits its `LIMIT`.** The warning tells the model these are only the top rows, so it doesn't add them up and report the sum as a total.
-- **Passes backend errors through unchanged.** Analytics SQL errors are already specific (`No field named status. Valid fields are …`, `table … not found`), so the model reads them as they are.
+It's a thin wrapper around `binding.query()`:
 
-For other frameworks, use `createAnalyticsSQLToolkit({ binding, catalog })` (`.query()`, `.search()`), `formatQueryOutput()` and `CATALOG_SEARCH_DESCRIPTION` from `cf-agent-sql`.
+- **Sends the SQL exactly as written.** `SHOW TABLES`, `DESCRIBE` and anything else go to the backend unchanged; the agent is told to use the catalog instead. Time filters use `now()`, e.g. `timestamp >= now() - INTERVAL '1 day'`.
+- **Passes backend errors through unchanged.** Analytics SQL errors are already specific (`No field named status. Valid fields are …`, `ORDER BY requires a LIMIT clause`), so the model reads them as they are.
+- **Cuts large results** to `maxRows` (100) and `maxResultChars` (16,000), and tells the model when it did. Results go to the model as TSV, which uses fewer tokens than JSON.
+
+For other frameworks, `createAnalyticsSQLToolkit({ binding, catalog })` from `cf-agent-sql` gives you `queryDescription`, `query()` and `search()`. Use them with `formatQueryOutput()` and `CATALOG_SEARCH_DESCRIPTION`.
 
 ## Things to know
 
 These are checked against production and included in every generated catalog:
 
 - **Most datasets are sampled.** Use `sum("sampleInterval")` instead of `count()`, `sumIf("sampleInterval", cond)` for conditional counts, and `quantileWeighted(0.99, col, "sampleInterval")` for percentiles.
-- **The engine is DataFusion with ClickHouse-style functions.** `toStartOfInterval` works. `quantile`, `median`, `uniq`, `date_bin`, and `count(DISTINCT …)` on sampled datasets don't.
+- **The engine is DataFusion with ClickHouse-style functions.** Bucket time with `toStartOfInterval(timestamp, INTERVAL 5 MINUTE)`. Anything unsupported comes back as a backend error, which the model reads and fixes.
 - **Double-quote camelCase columns**, for example `"httpStatus"`.
 
 ## License

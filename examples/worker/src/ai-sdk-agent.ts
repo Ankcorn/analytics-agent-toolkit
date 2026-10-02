@@ -11,15 +11,13 @@ export class AISDKAgent extends Agent<Env, State> {
   initialState: State = { messages: [] };
 
   async ask(prompt: string): Promise<string> {
-    // Two tools: analytics_query and analytics_catalog.
-    const sql = analyticsSQLTools({ binding: this.env.ANALYTICS_SQL, catalog });
     const agent = new ToolLoopAgent({
       model: createWorkersAI({ binding: this.env.AI })(
         "@cf/zai-org/glm-5.3-flash",
         { reasoning_effort: "low" }
       ),
-      instructions: sql.instructions,
-      tools: sql.tools,
+      // Two tools: analytics_query and analytics_catalog.
+      tools: analyticsSQLTools({ binding: this.env.ANALYTICS, catalog }),
       stopWhen: stepCountIs(8)
     });
 
