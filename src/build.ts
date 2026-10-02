@@ -40,10 +40,10 @@ export interface IntrospectionResponse {
 
 /** Dialect facts checked against production (Oct 2026): DataFusion parser/planner, ClickHouse-style functions. */
 export const DIALECT_NOTES: readonly string[] = [
-  "SQL is parsed by DataFusion with ClickHouse-style functions. SHOW, DESCRIBE, system.* and information_schema are NOT available — use this schema.",
+  "SQL is parsed by DataFusion with ClickHouse-style functions. SHOW, DESCRIBE, system.* and information_schema are NOT available — use the catalog.",
   'Double-quote camelCase identifiers to be safe: "httpStatus", "scriptName".',
   "Time buckets: toStartOfInterval(timestamp, INTERVAL 5 MINUTE). (date_bin is not available.)",
-  'Adaptively sampled datasets have a sampleInterval column: estimate counts with sum("sampleInterval"), conditional counts with sumIf("sampleInterval", cond), percentiles with quantileWeighted(0.99, col, "sampleInterval"). count() gives sampled rows only.',
+  'Adaptively sampled datasets have a sampleInterval column: estimate counts with sum("sampleInterval"), conditional counts with sumIf("sampleInterval", cond), percentiles with quantileWeighted(0.99, col, "sampleInterval"). count() gives sampled rows only. Call sum("sampleInterval") results estimated events, not sampled events; when an estimate is small, add count() to show how many rows it rests on.',
   "Not supported: quantile(), median(), approx_percentile_cont(), uniq(), ORDER BY inside aggregates, and DISTINCT aggregates on sampled datasets.",
   "Data is already scoped to your account; don't filter on accountTag."
 ];

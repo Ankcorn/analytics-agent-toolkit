@@ -2,8 +2,8 @@
  * The catalog is the workaround for `SHOW TABLES` / `DESCRIBE TABLE` not being
  * available through the Analytics SQL binding. It is generated at build time by
  * `asql render --out` (introspection → presets/filters → TS module) and passed
- * to the AI SDK / Pi tools at runtime. The query tool also answers SHOW/DESCRIBE
- * locally from it.
+ * to the AI SDK / Pi tools at runtime, where the agent reads it through the
+ * catalog search tool.
  */
 
 export interface ColumnDef {
@@ -67,7 +67,7 @@ export function findTable(
 export type RenderMode =
   /** Every table with every column. Best when the catalog is small. */
   | "full"
-  /** Only table names, descriptions and time columns. Pair with a describe tool. */
+  /** Only table names, descriptions and time columns. Pair with the catalog search tool. */
   | "index";
 
 export function renderCatalog(
@@ -123,6 +123,88 @@ export function renderTable(table: TableDef): string {
       lines.push(`-- ${e.question}`, e.sql.trim());
   }
   return lines.join("\n");
+}
+
+/** Input of the catalog search tool. Give `table` for one table's full definition, `query` to search, or neither to list tables. */
+export interface CatalogSearch {
+  /** Words matched against table and column names and descriptions, e.g. "status code", "cpu time". */
+  query?: string;
+  /** A table name (qualified or not), e.g. "logs.workersLogs": returns every column, notes and examples. */
+  table?: string;
+}
+
+export const CATALOG_SEARCH_DESCRIPTION: string = [
+  "Search the catalog of analytics tables you can query (SHOW TABLES / DESCRIBE are not available; use this instead).",
+  "Input: { query?: string; table?: string }.",
+  '- { table: "logs.workersLogs" } → that table\'s full definition: time column, every column with its type and description, notes and example queries.',
+  '- { query: "status code" } → columns whose name, description or example values mention any of the words, best matches first, plus the time column and the table\'s notes.',
+  "- {} → one line per table: name, time column, sampling, column count and description."
+].join("\n");
+
+/** Lowercase, and drop a plural "s" so "errors" also finds "error". */
+function searchTerm(word: string): string {
+  const w = word.toLowerCase();
+  return w.length > 3 && w.endsWith("s") && !w.endsWith("ss")
+    ? w.slice(0, -1)
+    : w;
+}
+
+export function searchCatalog(
+  catalog: Catalog,
+  { query, table }: CatalogSearch
+): string {
+  const index = () => catalog.tables.map(renderTableIndex).join("\n");
+  if (table) {
+    const t = findTable(catalog, table);
+    if (t) return renderTable(t);
+    const s = closest(
+      table,
+      catalog.tables.map((x) => x.name)
+    );
+    return `No table "${table}".${s.length ? ` Did you mean ${s.join(", ")}?` : ""}\nTables:\n${index()}`;
+  }
+  const terms = [
+    ...new Set((query ?? "").split(/\W+/).filter(Boolean).map(searchTerm))
+  ];
+  if (!terms.length) return `Tables:\n${index()}`;
+
+  /** How many of the terms appear in any of the texts. */
+  const score = (...texts: (string | number | undefined)[]) => {
+    const hay = texts
+      .filter((x) => x !== undefined)
+      .join(" ")
+      .toLowerCase();
+    return terms.filter((term) => hay.includes(term)).length;
+  };
+
+  const results: { best: number; text: string }[] = [];
+  for (const t of catalog.tables) {
+    const matches = t.columns
+      .map((c) => ({ c, n: score(c.name, c.description, ...(c.values ?? [])) }))
+      .filter((m) => m.n > 0 && m.c.name !== t.timeColumn)
+      .toSorted((a, b) => b.n - a.n);
+    if (!matches.length) {
+      // The table itself matches: point at it rather than dumping every column.
+      if (score(t.name, t.title, t.description))
+        results.push({
+          best: 0,
+          text: `${renderTableIndex(t)}\n(no matching columns: search { table: "${t.name}" } for all)`
+        });
+      continue;
+    }
+    const time = t.columns.filter((c) => c.name === t.timeColumn);
+    const columns = [...time, ...matches.map((m) => m.c)];
+    results.push({
+      best: matches[0]!.n,
+      text: `${renderTable({ ...t, columns, examples: [] })}\n(${t.columns.length - columns.length} more columns: search { table: "${t.name}" } for all)`
+    });
+  }
+  return results.length
+    ? results
+        .toSorted((a, b) => b.best - a.best)
+        .map((r) => r.text)
+        .join("\n\n")
+    : `No tables or columns match "${query}".\nTables:\n${index()}`;
 }
 
 export function normalizeIdent(name: string): string {

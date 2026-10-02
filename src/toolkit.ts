@@ -1,21 +1,12 @@
 import {
   type Catalog,
+  type CatalogSearch,
   type RenderMode,
-  type TableDef,
-  closest,
-  findTable,
   renderCatalog,
-  renderTable,
-  renderTableIndex
+  renderTableIndex,
+  searchCatalog
 } from "./catalog";
-import {
-  ensureLimit,
-  guardReadOnly,
-  parseMetaCommand,
-  referencedTables,
-  resolveTime,
-  unknownIdentifier
-} from "./sql";
+import { ensureLimit, outerLimit, referencedParams, resolveTime } from "./sql";
 
 /**
  * Structural type of the Workers `AnalyticsSQLBinding` so the package doesn't
@@ -45,10 +36,6 @@ export interface AnalyticsSQLToolkitOptions {
   maxRows?: number;
   /** Max characters of serialized rows returned to the model. Default 16_000. */
   maxResultChars?: number;
-  /** What to do when a query doesn't filter on the table's time column. Default "error". */
-  timeFilter?: "error" | "warn" | "off";
-  /** Reject tables not in the catalog. Default true. */
-  strictTables?: boolean;
   /** Default window for `$start` / `$end` when the caller gives none. Default 1h. */
   defaultLookbackMs?: number;
 }
@@ -66,7 +53,6 @@ export interface QueryInput {
 export type QueryOutput =
   | {
       ok: true;
-      kind: "rows";
       rows: Record<string, unknown>[];
       rowCount: number;
       truncated: boolean;
@@ -78,31 +64,46 @@ export type QueryOutput =
       window: { start: string; end: string };
       warnings?: string[];
     }
-  | { ok: true; kind: "catalog"; text: string; note: string }
   | { ok: false; error: string; hint?: string };
 
 export interface AnalyticsSQLToolkit {
   readonly catalog: Catalog;
   /** Text for a system prompt / tool description. */
   renderCatalog(mode?: RenderMode): string;
-  describeTables(names: readonly string[]): string;
+  /**
+   * The query tool's description: how to work, the dialect rules and a
+   * one-line-per-table index. Columns come from the catalog search tool.
+   */
+  queryToolDescription(catalogTool: string): string;
+  /** Search the catalog (what the catalog search tool runs). */
+  search(input: CatalogSearch): string;
   query(input: QueryInput): Promise<QueryOutput>;
 }
 
-export const QUERY_TOOL_DESCRIPTION: string = [
-  "Run a read-only SQL query against Cloudflare analytics data (DataFusion parser, ClickHouse-style functions).",
-  "SHOW TABLES / DESCRIBE are not supported by the backend; use the schema provided (or the describe tool) instead.",
-  "Always filter on the table's time column using the $start and $end parameters, e.g. `WHERE timestamp >= $start AND timestamp < $end`; set the window with the start/end arguments (ISO 8601 or relative like -1h, -7d).",
-  'Aggregate in SQL rather than pulling raw rows; results are truncated. On sampled tables use sum("sampleInterval") for counts and quantileWeighted(0.99, col, "sampleInterval") for percentiles.'
-].join("\n");
+export function queryToolDescription(
+  catalog: Catalog,
+  catalogTool: string
+): string {
+  return [
+    "Run a read-only SQL query against Cloudflare analytics data (DataFusion parser, ClickHouse-style functions).",
+    `Before writing SQL, call ${catalogTool} to get the columns: { table: "<name>" } for a table's full definition, or { query: "<words>" } to find columns. Skip it only if you already have the columns from earlier in this conversation. SHOW TABLES / DESCRIBE are not available.`,
+    "Always filter on the table's time column using the $start and $end parameters, e.g. `WHERE timestamp >= $start AND timestamp < $end`; set the window with the start/end arguments (ISO 8601 or relative like -1h, -7d).",
+    'Aggregate in SQL rather than pulling raw rows; results are truncated. On sampled tables use sum("sampleInterval") for counts and quantileWeighted(0.99, col, "sampleInterval") for percentiles.',
+    "Never add up rows of a LIMITed or truncated result to report a total: those are only the top rows. Run a separate aggregate query for totals.",
+    ...(catalog.notes?.length
+      ? ["", "Dialect notes:", ...catalog.notes.map((n) => `- ${n}`)]
+      : []),
+    "",
+    "Tables:",
+    ...catalog.tables.map(renderTableIndex)
+  ].join("\n");
+}
 
 export function createAnalyticsSQLToolkit(
   options: AnalyticsSQLToolkitOptions
 ): AnalyticsSQLToolkit {
   const maxRows = options.maxRows ?? 100;
   const maxChars = options.maxResultChars ?? 16_000;
-  const timeFilter = options.timeFilter ?? "error";
-  const strict = options.strictTables ?? true;
   const lookback = options.defaultLookbackMs ?? 3_600_000;
   const getBinding =
     typeof options.binding === "function"
@@ -110,73 +111,13 @@ export function createAnalyticsSQLToolkit(
       : () => options.binding as AnalyticsSQLLike;
 
   const c = options.catalog;
-  const listTables = () => c.tables.map(renderTableIndex).join("\n");
-
-  function describeTables(names: readonly string[]) {
-    if (names.length === 0) return renderCatalog(c, "full");
-    return names
-      .map((n) => {
-        const t = findTable(c, n);
-        if (t) return renderTable(t);
-        const suggestions = closest(
-          n,
-          c.tables.map((x) => x.name)
-        );
-        return `Unknown table "${n}".${suggestions.length ? ` Did you mean ${suggestions.join(", ")}?` : ""} Available: ${c.tables.map((x) => x.name).join(", ")}`;
-      })
-      .join("\n\n");
-  }
 
   async function query(input: QueryInput): Promise<QueryOutput> {
-    const meta = parseMetaCommand(input.sql);
-    if (meta) {
-      const text =
-        meta.kind === "show_tables"
-          ? listTables()
-          : describeTables([meta.table]);
-      return {
-        ok: true,
-        kind: "catalog",
-        text,
-        note: "Answered from the local catalog: SHOW/DESCRIBE are not supported by Analytics SQL. Now write a SELECT."
-      };
-    }
-
-    const guarded = guardReadOnly(input.sql);
-    if (!guarded.ok) return { ok: false, error: guarded.error };
-    let sql = guarded.sql;
-
-    const tables: TableDef[] = [];
-    for (const name of referencedTables(sql)) {
-      const t = findTable(c, name);
-      if (t) tables.push(t);
-      else if (strict) {
-        const s = closest(
-          name,
-          c.tables.map((x) => x.name)
-        );
-        return {
-          ok: false,
-          error: `Table "${name}" is not in the catalog.`,
-          hint: `${s.length ? `Did you mean ${s.join(", ")}? ` : ""}Available tables:\n${listTables()}`
-        };
-      }
-    }
-
+    // Sent as written, apart from a trailing ';' and (for SELECT/WITH) a LIMIT.
+    let sql = input.sql.trim().replace(/;\s*$/, "");
     const warnings: string[] = [];
-    if (timeFilter !== "off") {
-      const missing = tables.filter(
-        (t) => !new RegExp(`\\b${escapeRe(t.timeColumn)}\\b`, "i").test(sql)
-      );
-      if (missing.length) {
-        const msg = `Query does not filter on the time column of ${missing.map((t) => `${t.name} (${t.timeColumn})`).join(", ")}.`;
-        const hint = `Add e.g. \`WHERE ${missing[0]!.timeColumn} >= $start AND ${missing[0]!.timeColumn} < $end\` and pass start/end.`;
-        if (timeFilter === "error") return { ok: false, error: msg, hint };
-        warnings.push(`${msg} ${hint}`);
-      }
-    }
 
-    sql = ensureLimit(sql, maxRows + 1);
+    if (/^(select|with)\b/i.test(sql)) sql = ensureLimit(sql, maxRows + 1);
 
     let window: { start: string; end: string };
     try {
@@ -199,18 +140,15 @@ export function createAnalyticsSQLToolkit(
       end: window.end,
       ...input.params
     };
+    const used = referencedParams(sql);
     const params = Object.fromEntries(
-      Object.entries(all).filter(([k]) =>
-        new RegExp(`\\$${escapeRe(k)}\\b`).test(sql)
-      )
+      Object.entries(all).filter(([k]) => used.includes(k))
     );
-    const unbound = [...sql.matchAll(/\$(\w+)/g)]
-      .map((m) => m[1]!)
-      .filter((k) => !(k in params));
+    const unbound = used.filter((k) => !(k in params));
     if (unbound.length)
       return {
         ok: false,
-        error: `Unbound parameter(s): ${[...new Set(unbound)].map((k) => `$${k}`).join(", ")}`,
+        error: `Unbound parameter(s): ${unbound.map((k) => `$${k}`).join(", ")}`,
         hint: "Pass them in `params`."
       };
 
@@ -223,13 +161,17 @@ export function createAnalyticsSQLToolkit(
         rows = rows.slice(0, Math.floor(rows.length * 0.7));
         truncated = true;
       }
+      const limit = outerLimit(sql);
       if (truncated)
         warnings.push(
           `Result truncated to ${rows.length} rows; aggregate or add a smaller LIMIT.`
         );
+      else if (limit && limit <= maxRows && result.data.length >= limit)
+        warnings.push(
+          `Result hit LIMIT ${limit}: these are only the top rows, so don't sum them as a total. Run an aggregate query for totals.`
+        );
       return {
         ok: true,
-        kind: "rows",
         rows,
         rowCount: rows.length,
         truncated,
@@ -239,52 +181,23 @@ export function createAnalyticsSQLToolkit(
       };
     } catch (cause) {
       const error = cause instanceof Error ? cause.message : String(cause);
-      return { ok: false, error, hint: hintForError(error, tables, c) };
+      return { ok: false, error };
     }
   }
 
   return {
     catalog: c,
     renderCatalog: (mode = "full") => renderCatalog(c, mode),
-    describeTables,
+    queryToolDescription: (catalogTool) => queryToolDescription(c, catalogTool),
+    search: (input) => searchCatalog(c, input),
     query
   };
-}
-
-function hintForError(
-  error: string,
-  tables: TableDef[],
-  catalog: Catalog
-): string | undefined {
-  const ident = unknownIdentifier(error);
-  if (ident?.kind === "column") {
-    const scope = tables.length ? tables : catalog.tables;
-    const cols = scope.flatMap((t) => t.columns.map((c) => c.name));
-    const s = closest(ident.name, cols);
-    return [
-      s.length
-        ? `Unknown column "${ident.name}". Did you mean ${s.join(", ")}?`
-        : `Unknown column "${ident.name}".`,
-      ...scope.map(
-        (t) =>
-          `Columns of ${t.name}: ${t.columns.map((c) => c.name).join(", ")}`
-      )
-    ].join("\n");
-  }
-  if (ident?.kind === "table") {
-    return `Available tables: ${catalog.tables.map((t) => t.name).join(", ")}`;
-  }
-  if (tables.length) {
-    return `Check column names and types against the schema:\n${tables.map(renderTable).join("\n\n")}`;
-  }
-  return undefined;
 }
 
 /** Compact text rendering of a query result for the model (TSV is ~2x cheaper than JSON). */
 export function formatQueryOutput(out: QueryOutput): string {
   if (!out.ok)
     return `ERROR: ${out.error}${out.hint ? `\nHINT: ${out.hint}` : ""}`;
-  if (out.kind === "catalog") return `${out.note}\n\n${out.text}`;
   const header = `${out.rowCount} row(s), window ${out.window.start} → ${out.window.end}${
     out.statistics
       ? `, ${out.statistics.elapsed_ms}ms, ${out.statistics.rows_read} rows read`
@@ -310,8 +223,4 @@ function cell(v: unknown): string {
         ? JSON.stringify(v)
         : String(v);
   return s.replace(/[\t\n]/g, " ");
-}
-
-function escapeRe(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

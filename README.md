@@ -17,7 +17,7 @@ const agent = new ToolLoopAgent({
 The binding can run queries but can't list tables or describe them (`SHOW TABLES` and `DESCRIBE` fail), so an agent has no way to find out what it can query. `cf-agent-sql` fixes that in two steps:
 
 1. **Build time:** the `asql` CLI fetches the full catalog with `cf`, narrows it to the tables your agent needs, and writes them to a small TypeScript file.
-2. **Runtime:** the AI SDK or Pi tool gives the model that schema and checks every query against it.
+2. **Runtime:** the AI SDK or Pi tools give the model that schema, a tool to search it, and a tool to run queries through the binding.
 
 ## Install
 
@@ -27,13 +27,22 @@ npm install cf-agent-sql
 
 Install `ai` and `zod` for the AI SDK tool, or `@earendil-works/pi-ai` and `@earendil-works/pi-durable` for Pi. Both are optional peer dependencies.
 
-Add the binding in `cloudflare.config.ts`:
+Add the binding in `cloudflare.config.ts`. It's remote-only, so mark it remote for local dev:
 
 ```ts
-env: {
-  ANALYTICS_SQL: bindings.analyticsSQL();
-}
+import { bindings, defineConfig } from "@cloudflare/config";
+
+export default defineConfig({
+  worker: {
+    name: "my-agent",
+    entrypoint: "./src/index.ts",
+    compatibilityDate: "2026-09-25",
+    env: { ANALYTICS_SQL: bindings.analyticsSQL({ dev: { remote: true } }) }
+  }
+});
 ```
+
+Run it locally with `wrangler dev --experimental-new-config`, which proxies the binding to your account. `cf dev` (the Vite plugin) can't proxy this binding yet: every query fails with `WebSocket connection failed`.
 
 ## Generate the catalog
 
@@ -83,29 +92,35 @@ const { tools, instructions } = analyticsSQLTools({
 });
 ```
 
-This gives you an `analytics_query` tool with the schema in its description. If the schema is larger than `inlineBudgetChars` (12,000 by default), the description lists only table names and an `analytics_describe` tool returns the columns.
+This gives you two tools:
+
+- `analytics_query` runs SQL. Its description holds the dialect rules and one line per table, and tells the model to look up columns with `analytics_catalog` before writing SQL. The prompt stays the same size however big the catalog is.
+- `analytics_catalog` searches the catalog. Its input is `{ query?: string; table?: string }`: `{ table }` returns one table's full definition, `{ query: "status code" }` returns matching tables and columns, and `{}` lists the tables.
 
 ### Pi Durable
 
 ```ts
 import { analyticsSQLExtension } from "cf-agent-sql/pi";
 
+// e.g. inside a Durable Object
 registry.install(
-  analyticsSQLExtension({ binding: () => this.env.ANALYTICS_SQL, catalog })
+  analyticsSQLExtension({ binding: this.env.ANALYTICS_SQL, catalog })
 );
 ```
 
-The schema goes in an `analytics_schema` system prompt section, and the query tool is marked safe to rerun after a crash.
+You get the same `analytics_query` and `analytics_catalog` tools, both marked safe to rerun after a crash.
+
+[`examples/worker`](examples/worker) has both: an AI SDK route in a Worker and a Pi agent in a Durable Object. The Pi agent reaches Workers AI through the `AI` binding and AI Gateway, so it needs no API token.
 
 ## What the query tool does
 
-- **Answers `SHOW TABLES` and `DESCRIBE`** from the catalog, since the backend rejects them.
-- **Allows only `SELECT` and `WITH`**, one statement at a time, on tables in the catalog.
-- **Requires a time filter.** `start` and `end` (ISO 8601 or relative, like `-1h` or `-7d`) are passed as `$start` and `$end`. Queries that don't filter on the table's time column are rejected before they reach the backend.
+- **Sends your SQL as written.** The only changes are removing a trailing `;` and adding a `LIMIT` (below). `SHOW TABLES`, `DESCRIBE` and anything else go to the backend unchanged; the agent is told to use the catalog instead.
+- **Binds the time window.** `start` and `end` (ISO 8601 or relative, like `-1h` or `-7d`) are passed as `$start` and `$end`, along with any extra `params` the query references.
 - **Adds a `LIMIT`** and truncates results by row count and characters. Results go to the model as TSV, which uses fewer tokens than JSON.
-- **Adds hints to errors.** For example, `No field named status` comes back with `HINT: Did you mean httpStatus?` and the table's columns.
+- **Warns when a result hits its `LIMIT`.** The warning tells the model these are only the top rows, so it doesn't add them up and report the sum as a total.
+- **Passes backend errors through unchanged.** Analytics SQL errors are already specific (`No field named status. Valid fields are …`, `table … not found`), so the model reads them as they are.
 
-For other frameworks, use `createAnalyticsSQLToolkit({ binding, catalog })` and `formatQueryOutput()` from `cf-agent-sql`.
+For other frameworks, use `createAnalyticsSQLToolkit({ binding, catalog })` (`.query()`, `.search()`), `formatQueryOutput()` and `CATALOG_SEARCH_DESCRIPTION` from `cf-agent-sql`.
 
 ## Things to know
 

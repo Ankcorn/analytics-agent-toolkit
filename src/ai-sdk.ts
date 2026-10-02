@@ -8,20 +8,15 @@
  */
 import { tool, type ToolSet } from "ai";
 import { z } from "zod";
+import { CATALOG_SEARCH_DESCRIPTION } from "./catalog";
 import {
   type AnalyticsSQLToolkitOptions,
   type QueryOutput,
-  QUERY_TOOL_DESCRIPTION,
   createAnalyticsSQLToolkit,
   formatQueryOutput
 } from "./toolkit";
 
 export interface AnalyticsSQLToolsOptions extends AnalyticsSQLToolkitOptions {
-  /**
-   * Small catalogs are inlined into the query tool description. Larger ones get
-   * a table list there plus a `<prefix>_describe` tool. Default budget 12k chars.
-   */
-  inlineBudgetChars?: number;
   /** Tool name prefix. Default "analytics". */
   prefix?: string;
 }
@@ -32,12 +27,10 @@ export function analyticsSQLTools(options: AnalyticsSQLToolsOptions): {
 } {
   const toolkit = createAnalyticsSQLToolkit(options);
   const prefix = options.prefix ?? "analytics";
-  const full = toolkit.renderCatalog("full");
-  const inline = full.length <= (options.inlineBudgetChars ?? 12_000);
 
   const tools: ToolSet = {
     [`${prefix}_query`]: tool({
-      description: `${QUERY_TOOL_DESCRIPTION}\n\n${inline ? `Schema:\n${full}` : `Tables (call ${prefix}_describe for columns first):\n${toolkit.renderCatalog("index")}`}`,
+      description: toolkit.queryToolDescription(`${prefix}_catalog`),
       inputSchema: z.object({
         sql: z
           .string()
@@ -70,19 +63,27 @@ export function analyticsSQLTools(options: AnalyticsSQLToolsOptions): {
     })
   };
 
-  if (!inline) {
-    tools[`${prefix}_describe`] = tool({
-      description:
-        "Columns, types, notes and example queries for analytics tables. Use instead of DESCRIBE / SHOW TABLES.",
-      inputSchema: z.object({
-        tables: z.array(z.string()).describe("Fully-qualified table names.")
-      }),
-      execute: async ({ tables }) => toolkit.describeTables(tables)
-    });
-  }
+  tools[`${prefix}_catalog`] = tool({
+    description: CATALOG_SEARCH_DESCRIPTION,
+    inputSchema: z.object({
+      query: z
+        .string()
+        .optional()
+        .describe(
+          'Words to match against table/column names and descriptions, e.g. "status code".'
+        ),
+      table: z
+        .string()
+        .optional()
+        .describe(
+          'A table name, e.g. "logs.workersLogs", for its full definition.'
+        )
+    }),
+    execute: async (input) => toolkit.search(input)
+  });
 
   return {
     tools,
-    instructions: `You can query Cloudflare analytics with ${prefix}_query. Prefer aggregations over raw rows, always bound queries by time, and if a query fails read the HINT and retry with corrected SQL.`
+    instructions: `You can query Cloudflare analytics with ${prefix}_query. Use ${prefix}_catalog to find tables and columns. Prefer aggregations over raw rows, always bound queries by time, and if a query fails read the error and retry with corrected SQL.`
   };
 }

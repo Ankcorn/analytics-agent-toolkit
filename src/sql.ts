@@ -1,107 +1,32 @@
-/** Light-weight SQL inspection. Not a parser: just enough to guard and to give good hints. */
+/** Light-weight SQL inspection. Not a parser: just enough to bind params and cap rows. */
 
-export type MetaCommand =
-  | { kind: "show_tables" }
-  | { kind: "describe"; table: string };
-
-/** Strip comments and a trailing semicolon. */
-export function normalizeSql(sql: string): string {
-  return sql
-    .replace(/--[^\n]*/g, "")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .trim()
-    .replace(/;\s*$/, "")
-    .trim();
-}
+const TRAILING_LIMIT = /\blimit\s+(\d+)(?:\s+offset\s+\d+)?\s*$/i;
+const TRAILING_COMMENTS = /(?:\s*(?:--[^\n]*|\/\*[\s\S]*?\*\/))+\s*$/;
 
 /**
- * Agents reach for `SHOW TABLES` / `DESCRIBE x` first. The binding rejects them,
- * so we recognise them and answer from the catalog instead of failing.
+ * The outer query's `LIMIT n`, if any. A LIMIT inside a subquery doesn't
+ * count; trailing comments are ignored (for this check only).
  */
-export function parseMetaCommand(sql: string): MetaCommand | undefined {
-  const s = normalizeSql(sql);
-  if (/^show\s+(full\s+)?tables\b/i.test(s) || /^show\s+databases\b/i.test(s))
-    return { kind: "show_tables" };
-  if (
-    /^select\b[\s\S]*\bfrom\s+(system\.tables|information_schema\.tables)\b/i.test(
-      s
-    )
-  )
-    return { kind: "show_tables" };
-  const describe =
-    /^(?:describe|desc|show\s+columns\s+from|show\s+create\s+table)\s+(?:table\s+)?([\w.`"]+)/i.exec(
-      s
-    );
-  if (describe) return { kind: "describe", table: describe[1]! };
-  const infoSchema =
-    /^select\b[\s\S]*\bfrom\s+(?:system\.columns|information_schema\.columns)\b[\s\S]*\b(?:table|table_name)\s*=\s*'([\w.]+)'/i.exec(
-      s
-    );
-  if (infoSchema) return { kind: "describe", table: infoSchema[1]! };
-  return undefined;
+export function outerLimit(sql: string): number | undefined {
+  const m = TRAILING_LIMIT.exec(sql.replace(TRAILING_COMMENTS, ""));
+  return m ? Number(m[1]) : undefined;
 }
 
-export type GuardResult =
-  | { ok: true; sql: string }
-  | { ok: false; error: string };
-
-export function guardReadOnly(sql: string): GuardResult {
-  const s = normalizeSql(sql);
-  if (!s) return { ok: false, error: "Query is empty." };
-  if (s.includes(";"))
-    return {
-      ok: false,
-      error: "Only a single statement is allowed (remove the ';')."
-    };
-  if (!/^(select|with)\b/i.test(s))
-    return { ok: false, error: "Only SELECT / WITH queries are allowed." };
-  return { ok: true, sql: s };
-}
-
-/** Append `LIMIT n` when the query has no LIMIT at all. Deliberately conservative. */
+/** Append `LIMIT n` unless the outer query has one (Analytics SQL requires it with ORDER BY). */
 export function ensureLimit(sql: string, limit: number): string {
-  if (/\blimit\s+\d+/i.test(sql)) return sql;
-  return `${sql}\nLIMIT ${limit}`;
+  return outerLimit(sql) === undefined ? `${sql}\nLIMIT ${limit}` : sql;
 }
 
-/** `FROM x` / `JOIN x` targets, ignoring CTE names. */
-export function referencedTables(sql: string): string[] {
-  const s = normalizeSql(sql);
-  const ctes = new Set(
-    [...s.matchAll(/(?:with|,)\s*([\w]+)\s+as\s*\(/gi)].map((m) =>
-      m[1]!.toLowerCase()
-    )
-  );
-  const tables = [...s.matchAll(/\b(?:from|join)\s+([\w.`"]+)/gi)]
-    .map((m) => m[1]!.replace(/[`"]/g, ""))
-    .filter((t) => !ctes.has(t.toLowerCase()) && t !== "(");
-  return [...new Set(tables)];
+/** Blank out the contents of '...' string literals so keywords and `$x` inside them are ignored. */
+export function stripStrings(sql: string): string {
+  return sql.replace(/'(?:[^']|'')*'/g, "''");
 }
 
-/** Pull the offending identifier out of common ClickHouse / SQL error messages. */
-export function unknownIdentifier(
-  error: string
-): { kind: "column" | "table"; name: string } | undefined {
-  // Analytics SQL (DataFusion) formats, checked against production:
-  //   Schema error: No field named status. Valid fields are …
-  //   Error during planning: table `logs.workerLogs` not found
-  const df = /No field named\s+[`"']?([\w.]+?)[`"']?[.\s]/i.exec(error);
-  if (df?.[1]) return { kind: "column", name: df[1].split(".").pop()! };
-  const dfTable = /table\s+[`"']([\w.]+)[`"']\s+not found/i.exec(error);
-  if (dfTable?.[1]) return { kind: "table", name: dfTable[1] };
-  // Generic / ClickHouse formats.
-  const table =
-    /(?:unknown\s+table|table\s+[\w`'".]*\s*does(?:n't| not)\s+exist|UNKNOWN_TABLE)[^'`"]*['`"]?([\w.]+)['`"]?/i.exec(
-      error
-    );
-  if (table?.[1] && !/^(expression|identifier)$/i.test(table[1]))
-    return { kind: "table", name: table[1] };
-  const column =
-    /(?:unknown\s+(?:expression\s+)?(?:identifier|column)|missing\s+columns?|UNKNOWN_IDENTIFIER|no\s+such\s+column)[^'`"]*['`"]([\w.]+)['`"]/i.exec(
-      error
-    );
-  if (column?.[1]) return { kind: "column", name: column[1].split(".").pop()! };
-  return undefined;
+/** `$name` parameters referenced outside string literals. */
+export function referencedParams(sql: string): string[] {
+  return [
+    ...new Set([...stripStrings(sql).matchAll(/\$(\w+)/g)].map((m) => m[1]!))
+  ];
 }
 
 /**
