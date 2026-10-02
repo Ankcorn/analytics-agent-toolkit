@@ -1,6 +1,6 @@
 {
-  "name": "cf-agent-sql",
-  "version": "0.0.0",
+  "name": "analytics-agent-toolkit",
+  "version": "0.1.0",
   "description": "Give AI SDK and Pi agents a schema-aware, read-only tool over the Cloudflare Analytics SQL binding",
   "keywords": [
     "agents",
@@ -12,10 +12,18 @@
     "tools",
     "workers"
   ],
+  "homepage": "https://github.com/Ankcorn/analytics-agent-toolkit#readme",
+  "bugs": {
+    "url": "https://github.com/Ankcorn/analytics-agent-toolkit/issues"
+  },
   "license": "MIT",
   "author": "Thomas Ankcorn",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ankcorn/analytics-agent-toolkit.git"
+  },
   "bin": {
-    "asql": "./dist/cli.js"
+    "analytics-agent-toolkit": "./dist/cli.js"
   },
   "files": [
     "dist",

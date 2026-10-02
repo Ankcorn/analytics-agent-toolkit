@@ -1,4 +1,4 @@
-import type { Presets } from "cf-agent-sql";
+import type { Presets } from "analytics-agent-toolkit";
 
 /** Build-time only: `pnpm run catalog` turns this into src/analytics-catalog.ts. */
 export const presets = {

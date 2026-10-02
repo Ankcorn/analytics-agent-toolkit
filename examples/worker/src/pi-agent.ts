@@ -5,7 +5,7 @@ import {
   Harness,
   MemoryStorage
 } from "@earendil-works/pi-durable";
-import { analyticsSQLExtension } from "cf-agent-sql/pi";
+import { analyticsSQLExtension } from "analytics-agent-toolkit/pi";
 import { catalog } from "./analytics-catalog"; // generated: pnpm run catalog
 import { workersAIModels } from "./workers-ai-models";
 

@@ -1,4 +1,4 @@
-// Runtime core. Framework adapters: `cf-agent-sql/ai-sdk`, `cf-agent-sql/pi`.
+// Runtime core. Framework adapters: `analytics-agent-toolkit/ai-sdk`, `analytics-agent-toolkit/pi`.
 export type {
   Catalog,
   CatalogSearch,

@@ -1,0 +1,7 @@
+# analytics-agent-toolkit
+
+## 0.1.0
+
+### Minor Changes
+
+- 42b7a2a: First release: Analytics SQL query and catalog search tools for AI SDK 7 (`analytics-agent-toolkit/ai-sdk`) and Pi Durable (`analytics-agent-toolkit/pi`), plus the `analytics-agent-toolkit` CLI that turns `cf analytics sql introspection` output and presets into a small generated catalog module.

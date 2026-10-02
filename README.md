@@ -1,11 +1,11 @@
-# cf-agent-sql
+# analytics-agent-toolkit
 
 Give AI SDK and Pi agents a read-only, schema-aware tool over the Cloudflare Analytics SQL binding.
 
 ```ts
 import { createRegistry } from "@earendil-works/pi-durable";
-import { analyticsSQLExtension } from "cf-agent-sql/pi";
-import { catalog } from "./analytics-catalog"; // generated at build time by `asql render`
+import { analyticsSQLExtension } from "analytics-agent-toolkit/pi";
+import { catalog } from "./analytics-catalog"; // generated at build time by `analytics-agent-toolkit render`
 
 const registry = createRegistry();
 registry.install(
@@ -16,15 +16,15 @@ registry.install(
 // Open your Pi harness with this registry. Full Agents SDK examples for Pi and AI SDK are below.
 ```
 
-The binding can run queries but can't list tables or describe them (`SHOW TABLES` and `DESCRIBE` fail), so an agent has no way to find out what it can query. `cf-agent-sql` fixes that in two steps:
+The binding can run queries but can't list tables or describe them (`SHOW TABLES` and `DESCRIBE` fail), so an agent has no way to find out what it can query. `analytics-agent-toolkit` fixes that in two steps:
 
-1. **Build time:** the `asql` CLI fetches the full catalog with `cf`, narrows it to the tables your agent needs, and writes them to a small TypeScript file.
+1. **Build time:** the `analytics-agent-toolkit` CLI fetches the full catalog with `cf`, narrows it to the tables your agent needs, and writes them to a small TypeScript file.
 2. **Runtime:** the AI SDK or Pi tools give the model that schema, a tool to search it, and a tool to run queries through the binding.
 
 ## Install
 
 ```sh
-npm install cf-agent-sql
+npm install analytics-agent-toolkit
 ```
 
 Install `ai` and `zod` for the AI SDK tool, or `@earendil-works/pi-ai` and `@earendil-works/pi-durable` for Pi. Both are optional peer dependencies.
@@ -49,9 +49,12 @@ Run it locally with `wrangler dev --experimental-new-config`, which proxies the 
 ## Generate the catalog
 
 ```sh
-npx asql sync                    # cf analytics sql introspection get → .cloudflare/analytics-sql/
-npx asql render --preset workers # preview the schema the model will see, with a token count
-npx asql render --preset workers --out src/analytics-catalog.ts
+# Fetch the full catalog with `cf analytics sql introspection get` into .cloudflare/analytics-sql/
+npx analytics-agent-toolkit sync
+# Preview the schema the model will see, with a token count
+npx analytics-agent-toolkit render --preset workers
+# Write it as the module your Worker imports
+npx analytics-agent-toolkit render --preset workers --out src/analytics-catalog.ts
 ```
 
 `sync` uses your `cf` login. The full catalog (about 90 datasets and 1,100 columns) is cached locally and never bundled. Only the generated file ships with your Worker.
@@ -59,7 +62,7 @@ npx asql render --preset workers --out src/analytics-catalog.ts
 Presets live in `presets.ts` next to your app:
 
 ```ts
-import type { Presets } from "cf-agent-sql";
+import type { Presets } from "analytics-agent-toolkit";
 
 export const presets = {
   workers: {
@@ -95,7 +98,7 @@ Both run inside an [Agents SDK](https://developers.cloudflare.com/agents/) `Agen
 ```ts
 import { Agent } from "agents";
 import { createRegistry } from "@earendil-works/pi-durable";
-import { analyticsSQLExtension } from "cf-agent-sql/pi";
+import { analyticsSQLExtension } from "analytics-agent-toolkit/pi";
 import { catalog } from "./analytics-catalog";
 
 export class PiAgent extends Agent<Env> {
@@ -118,7 +121,7 @@ Both tools are marked safe to rerun after a crash.
 import { Agent } from "agents";
 import { stepCountIs, ToolLoopAgent } from "ai";
 import { createWorkersAI } from "workers-ai-provider";
-import { analyticsSQLTools } from "cf-agent-sql/ai-sdk";
+import { analyticsSQLTools } from "analytics-agent-toolkit/ai-sdk";
 import { catalog } from "./analytics-catalog";
 
 export class AISDKAgent extends Agent<Env> {
@@ -143,7 +146,7 @@ It's a thin wrapper around `binding.query()`:
 - **Passes backend errors through unchanged.** Analytics SQL errors are already specific (`No field named status. Valid fields are …`, `ORDER BY requires a LIMIT clause`), so the model reads them as they are.
 - **Cuts large results** to `maxRows` (100) and `maxResultChars` (16,000), and tells the model when it did. Results go to the model as TSV, which uses fewer tokens than JSON.
 
-For other frameworks, `createAnalyticsSQLToolkit({ binding, catalog })` from `cf-agent-sql` gives you `queryDescription`, `query()` and `search()`. Use them with `formatQueryOutput()` and `CATALOG_SEARCH_DESCRIPTION`.
+For other frameworks, `createAnalyticsSQLToolkit({ binding, catalog })` from `analytics-agent-toolkit` gives you `queryDescription`, `query()` and `search()`. Use them with `formatQueryOutput()` and `CATALOG_SEARCH_DESCRIPTION`.
 
 ## Things to know
 

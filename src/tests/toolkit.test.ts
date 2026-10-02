@@ -310,10 +310,13 @@ test("generated module is importable and drives the AI SDK tools (build → runt
     excludeColumns: ["accountTag"]
   });
   const file = join(
-    mkdtempSync(join(tmpdir(), "asql-")),
+    mkdtempSync(join(tmpdir(), "analytics-agent-toolkit-")),
     "analytics-catalog.ts"
   );
-  writeFileSync(file, catalogToModule(subset, "asql render --test"));
+  writeFileSync(
+    file,
+    catalogToModule(subset, "analytics-agent-toolkit render --test")
+  );
 
   // Act: runtime step
   const { catalog: generated } = (await import(pathToFileURL(file).href)) as {

@@ -2,7 +2,7 @@ import { bindings, defineConfig, exports } from "@cloudflare/config";
 
 export default defineConfig({
   worker: {
-    name: "cf-agent-sql-example",
+    name: "analytics-agent-toolkit-example",
     entrypoint: "./src/index.ts",
     compatibilityDate: "2026-09-25",
     compatibilityFlags: ["nodejs_compat"],
@@ -11,11 +11,11 @@ export default defineConfig({
       // Workers AI is remote-only: `wrangler dev` proxies it to your account.
       AI: bindings.ai({ dev: { remote: true } }),
       AI_SDK_AGENT: bindings.durableObject({
-        worker: "cf-agent-sql-example",
+        worker: "analytics-agent-toolkit-example",
         exportName: "AISDKAgent"
       }),
       PI_AGENT: bindings.durableObject({
-        worker: "cf-agent-sql-example",
+        worker: "analytics-agent-toolkit-example",
         exportName: "PiAgent"
       })
     },

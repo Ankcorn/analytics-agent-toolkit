@@ -1,7 +1,7 @@
 import { Agent } from "agents";
 import { stepCountIs, ToolLoopAgent, type ModelMessage } from "ai";
 import { createWorkersAI } from "workers-ai-provider";
-import { analyticsSQLTools } from "cf-agent-sql/ai-sdk";
+import { analyticsSQLTools } from "analytics-agent-toolkit/ai-sdk";
 import { catalog } from "./analytics-catalog"; // generated: pnpm run catalog
 
 type State = { messages: ModelMessage[] };

@@ -7,5 +7,5 @@
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
-  "ignore": ["cf-agent-sql-example-worker"]
+  "ignore": ["analytics-agent-toolkit-example"]
 }

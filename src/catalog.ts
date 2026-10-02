@@ -1,7 +1,7 @@
 /**
  * The catalog is the workaround for `SHOW TABLES` / `DESCRIBE TABLE` not being
  * available through the Analytics SQL binding. It is generated at build time by
- * `asql render --out` (introspection → preset → TS module) and passed
+ * `analytics-agent-toolkit render --out` (introspection → preset → TS module) and passed
  * to the AI SDK / Pi tools at runtime, where the agent reads it through the
  * catalog search tool.
  */
@@ -41,7 +41,7 @@ export interface Catalog {
   tables: readonly TableDef[];
 }
 
-/** Every table in full, for previewing what the model can see (`asql render`). */
+/** Every table in full, for previewing what the model can see (`analytics-agent-toolkit render`). */
 export function renderCatalog(catalog: Catalog): string {
   return [
     ...(catalog.notes?.length

@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * asql — build-time catalog tool for Analytics SQL agents.
+ * analytics-agent-toolkit — build-time catalog tool for Analytics SQL agents.
  *
- *   asql sync                                      # cf introspection → local cache (not bundled)
- *   asql render --preset workers                   # preview what the model will see
- *   asql render --preset workers --out src/analytics-catalog.ts   # generate the runtime subset
+ *   analytics-agent-toolkit sync                      # cf introspection → local cache (not bundled)
+ *   analytics-agent-toolkit render --preset workers   # preview what the model will see
+ *   analytics-agent-toolkit render --preset workers --out src/analytics-catalog.ts
  */
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -21,13 +21,13 @@ import {
   filterCatalog
 } from "./build";
 
-const HELP = `asql — build-time catalog tool for Analytics SQL agents (wraps \`cf\`).
+const HELP = `analytics-agent-toolkit — build-time catalog tool for Analytics SQL agents (wraps \`cf\`).
 
-  asql sync [--account <id>]
+  analytics-agent-toolkit sync [--account <id>]
       Fetch the full catalog via \`cf analytics sql introspection get --include-columns\`
       into ${".cloudflare/analytics-sql/introspection.json"} (local cache, never bundled).
 
-  asql render [--preset <name>] [--table <glob>] [--out <file.ts>]
+  analytics-agent-toolkit render [--preset <name>] [--table <glob>] [--out <file.ts>]
       Without --out: print the schema text the model will see (+ token estimate).
       With --out:    write it as a TS module exporting \`catalog\` for the AI SDK / Pi tools.
 
@@ -97,7 +97,9 @@ async function sync(): Promise<void> {
 async function render(): Promise<void> {
   const cache = resolve(flags.cache!);
   if (!existsSync(cache))
-    fail(`No catalog cache at ${flags.cache}. Run \`asql sync\` first.`);
+    fail(
+      `No catalog cache at ${flags.cache}. Run \`analytics-agent-toolkit sync\` first.`
+    );
   let catalog = catalogFromIntrospection(
     JSON.parse(readFileSync(cache, "utf8")) as IntrospectionResponse
   );
@@ -124,7 +126,10 @@ async function render(): Promise<void> {
     .slice(2)
     .map((a) => (/\s/.test(a) ? `'${a}'` : a))
     .join(" ");
-  writeFileSync(resolve(flags.out), catalogToModule(catalog, `asql ${argv}`));
+  writeFileSync(
+    resolve(flags.out),
+    catalogToModule(catalog, `analytics-agent-toolkit ${argv}`)
+  );
   console.log(
     `Wrote ${flags.out}: ${catalog.tables.map((t) => t.name).join(", ")} (${summary})`
   );

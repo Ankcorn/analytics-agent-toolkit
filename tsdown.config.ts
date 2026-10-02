@@ -17,7 +17,7 @@ export default defineConfig([
     clean: true,
     deps: { neverBundle: [/^cloudflare:/, "ai", "zod", /^@earendil-works\//] }
   },
-  // Build-time CLI (`asql`): Node only, never imported by a Worker.
+  // Build-time CLI (`analytics-agent-toolkit`): Node only, never imported by a Worker.
   {
     ...shared,
     entry: ["src/cli.ts"],

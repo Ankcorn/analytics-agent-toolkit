@@ -71,7 +71,7 @@ importers:
       ai:
         specifier: ^7.0.127
         version: 7.0.127(zod@4.6.5)
-      cf-agent-sql:
+      analytics-agent-toolkit:
         specifier: workspace:*
         version: link:../..
       workers-ai-provider:
