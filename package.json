@@ -1,6 +1,6 @@
 {
   "name": "cf-agent-sql",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Give AI SDK and Pi agents a schema-aware, read-only tool over the Cloudflare Analytics SQL binding",
   "keywords": [
     "agents",
