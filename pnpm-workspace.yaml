@@ -1,0 +1,19 @@
+packages:
+  - "."
+  - "examples/*"
+allowBuilds:
+  esbuild: true
+  workerd: true
+  sharp: false
+  protobufjs: false
+  "@google/genai": false
+minimumReleaseAgeExclude:
+  - "@ai-sdk/gateway@4.0.103"
+  - "@earendil-works/chord@1.0.0"
+  - "@earendil-works/pi-ai@1.0.0"
+  - "@earendil-works/pi-durable@1.0.0"
+  - "@earendil-works/pi-telemetry@1.0.0"
+  - "@types/node@24.19.1"
+  - ai@7.0.127
+  - cf@1.0.0-beta.11
+  - "@cloudflare/vite-plugin@2.0.0-beta.sha-52b0dc0e9"
