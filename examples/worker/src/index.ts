@@ -1,18 +1,18 @@
 import { env } from "cloudflare:workers";
-import { generateText, stepCountIs } from "ai";
-import { createWorkersAI } from "workers-ai-provider";
-import { analyticsSQLTools } from "cf-agent-sql/ai-sdk";
-import { catalog } from "./analytics-catalog"; // generated: pnpm run catalog
+import { getAgentByName } from "agents";
 
+export { AISDKAgent } from "./ai-sdk-agent";
 export { PiAgent } from "./pi-agent";
 
-const MODEL = "@cf/zai-org/glm-5.3-flash";
-
+/**
+ * POST /ai-sdk or /pi with { prompt, id? }. Each id is its own agent
+ * instance, so follow-up prompts with the same id continue the conversation.
+ */
 export default {
   async fetch(request): Promise<Response> {
-    const url = new URL(request.url);
+    const { pathname } = new URL(request.url);
     if (request.method !== "POST")
-      return new Response("POST /ai-sdk or /pi with { prompt }", {
+      return new Response("POST /ai-sdk or /pi with { prompt, id? }", {
         status: 404
       });
     const { prompt, id = "default" } = await request.json<{
@@ -20,30 +20,14 @@ export default {
       id?: string;
     }>();
 
-    // AI SDK: the tool runs in the Worker.
-    if (url.pathname === "/ai-sdk") {
-      const sql = analyticsSQLTools({ binding: env.ANALYTICS_SQL, catalog });
-      const { text, steps } = await generateText({
-        model: createWorkersAI({ binding: env.AI })(MODEL, {
-          reasoning_effort: "low"
-        }),
-        system: sql.instructions,
-        tools: sql.tools,
-        stopWhen: stepCountIs(8),
-        prompt
-      });
-      return Response.json({
-        answer: text,
-        toolCalls: steps.flatMap((s) =>
-          s.toolCalls.map((c) => ({ tool: c.toolName, input: c.input }))
-        )
-      });
+    if (pathname === "/ai-sdk") {
+      const agent = await getAgentByName(env.AI_SDK_AGENT, id);
+      return Response.json({ answer: await agent.ask(prompt) });
     }
-
-    // Pi: the tool runs in a Durable Object, one conversation per id.
-    if (url.pathname === "/pi")
-      return Response.json(await env.PI_AGENT.getByName(id).ask(prompt));
-
+    if (pathname === "/pi") {
+      const agent = await getAgentByName(env.PI_AGENT, id);
+      return Response.json({ answer: await agent.ask(prompt) });
+    }
     return new Response("Not found", { status: 404 });
   }
 } satisfies ExportedHandler<Env>;

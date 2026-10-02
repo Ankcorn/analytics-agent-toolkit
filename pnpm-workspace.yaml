@@ -7,6 +7,7 @@ allowBuilds:
   sharp: false
   protobufjs: false
   "@google/genai": false
+  core-js-pure: false
 minimumReleaseAgeExclude:
   - "@ai-sdk/gateway@4.0.103"
   - "@earendil-works/chord@1.0.0"
