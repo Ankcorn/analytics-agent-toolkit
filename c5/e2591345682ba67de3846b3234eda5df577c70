@@ -1,0 +1,55 @@
+.changeset/config.json
+  s_9e9c386f562ab6::t_6181f04b833bdd 10
+CHANGELOG.md
+  s_9e9c386f562ab6::t_a0b69d748f31a2 1-7
+README.md
+  s_9e9c386f562ab6::t_b3ac049080cfbf 1,7-8,19,21,27,52-57,65,101,124,149
+examples/worker/cloudflare.config.ts
+  s_9e9c386f562ab6::t_7de05bf6f2aed1 5,14,18
+examples/worker/package.json
+  s_9e9c386f562ab6::t_fded2db921bf2f 2,6-7,18
+examples/worker/presets.ts
+  s_9e9c386f562ab6::t_05f8762f37e886 1
+examples/worker/src/ai-sdk-agent.ts
+  s_9e9c386f562ab6::t_64a7e0b25210fd 4
+examples/worker/src/analytics-catalog.ts
+  s_9e9c386f562ab6::t_075881afb94100 1-2
+examples/worker/src/pi-agent.ts
+  s_9e9c386f562ab6::t_a1c662e014f4bc 8
+package.json
+  s_9e9c386f562ab6::t_e084975a011469 2-3,15-18,21-24,26
+pnpm-lock.yaml
+  s_9e9c386f562ab6::t_2a8f0e07a1e5da 74
+src/ai-sdk.ts
+  s_9e9c386f562ab6::t_5e09b59a34eeaa 4-5
+src/build.ts
+  s_9e9c386f562ab6::t_d9bef98ed203bb 2,161
+src/catalog.ts
+  s_9e9c386f562ab6::t_fe26087941f7e1 4,44
+src/cli.ts
+  s_9e9c386f562ab6::t_24bc427e5b7802 3,5-7,24,26,30,100-102,129-132
+src/index.ts
+  s_9e9c386f562ab6::t_7cffbb46c74563 1
+src/pi.ts
+  s_9e9c386f562ab6::t_ab9f68b91305d9 4-5
+src/tests/toolkit.test.ts
+  s_9e9c386f562ab6::t_c3739611d79bfc 313,316-319
+tsdown.config.ts
+  s_9e9c386f562ab6::t_cc0c2bd2bfa956 20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "c5e2591345682ba67de3846b3234eda5df577c70",
+  "prompts": {},
+  "sessions": {
+    "s_9e9c386f562ab6": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f04441541ffep8Xp9TJjY69ijC",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Thomas Ankcorn <tankcorn@cloudflare.com>"
+    }
+  }
+}
